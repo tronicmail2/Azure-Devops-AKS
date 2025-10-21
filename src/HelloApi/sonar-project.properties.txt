@@ -1,0 +1,8 @@
+sonar.projectKey=dotnet-aks-devops
+sonar.projectName=Dotnet AKS DevOps Demo
+sonar.host.url=https://<YOUR_SONARQUBE_URL>
+sonar.login=$(SONAR_TOKEN)
+
+sonar.sources=src
+sonar.exclusions=**/obj/**,**/bin/**
+sonar.cs.opencover.reportsPaths=coverage.opencover.xml

@@ -1,0 +1,103 @@
+trigger:
+  - main
+
+variables:
+  ACR_NAME: $(acrName)                # set in pipeline variables
+  IMAGE_NAME: helloapi
+  SONAR_TOKEN: $(SONAR_TOKEN)         # secret variable
+  SONAR_URL: https://<YOUR_SONARQUBE_URL>
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+- stage: Build
+  jobs:
+  - job: Build_and_Test
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        packageType: 'sdk'
+        version: '8.x'
+
+    - script: dotnet test src --collect:"XPlat Code Coverage"
+      displayName: 'Run tests with coverage'
+
+    - task: SonarQubePrepare@5
+      inputs:
+        SonarQube: 'SonarQube'               # service connection name
+        scannerMode: 'CLI'
+        configFile: 'sonar-project.properties'
+        extraProperties: |
+          sonar.projectKey=dotnet-aks-devops
+          sonar.cs.opencover.reportsPaths=$(Agent.TempDirectory)/**/coverage.opencover.xml
+
+    - task: SonarQubeAnalyze@5
+    - task: SonarQubePublish@5
+
+    - script: |
+        docker build -t $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId) .
+        az acr login --name $(ACR_NAME)
+        docker push $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)
+      displayName: 'Build & push Docker image'
+
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(System.DefaultWorkingDirectory)/infra'
+        artifact: 'tf-infra'
+
+- stage: Deploy
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - deployment: DeployAKS
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: 'tf-infra'
+
+          - script: |
+              cd $(Pipeline.Workspace)/tf-infra
+              terraform init -backend-config="resource_group_name=rg-tfstate" -backend-config="storage_account_name=tfstate<unique>"
+              terraform apply -auto-approve -var "acr_name=$(ACR_NAME)"
+            displayName: 'Terraform Apply'
+
+          - task: KubernetesManifest@0
+            inputs:
+              action: 'deploy'
+              kubernetesServiceConnection: 'aks-sc'   # service connection with kubeconfig
+              namespace: 'default'
+              manifests: |
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: helloapi
+                spec:
+                  replicas: 2
+                  selector:
+                    matchLabels:
+                      app: helloapi
+                  template:
+                    metadata:
+                      labels:
+                        app: helloapi
+                    spec:
+                      containers:
+                      - name: helloapi
+                        image: $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(Build.BuildId)
+                        ports:
+                        - containerPort: 80
+                ---
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  name: helloapi-svc
+                spec:
+                  type: LoadBalancer
+                  ports:
+                  - port: 80
+                  selector:
+                    app: helloapi

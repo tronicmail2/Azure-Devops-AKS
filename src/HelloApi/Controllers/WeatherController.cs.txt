@@ -1,0 +1,9 @@
+using Microsoft.AspNetCore.Mvc;
+
+[ApiController]
+[Route("weather")]
+public class WeatherController : ControllerBase
+{
+    [HttpGet]
+    public IActionResult Get() => Ok(new { forecast = "Sunny", temperatureC = 22 });
+}
